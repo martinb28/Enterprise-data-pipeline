@@ -1,5 +1,3 @@
-version: "3.8"
-
 x-airflow-common: &airflow-common
   build:
     context: ./airflow
@@ -15,13 +13,10 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
-    # MinIO / S3 connection
     AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
     AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
     AWS_DEFAULT_REGION: us-east-1
-    # Spark
     SPARK_MASTER_URL: spark://spark-master:7077
-    # Pipeline config
     PIPELINE_ENV: local
   volumes:
     - ../dags:/opt/airflow/dags
@@ -68,8 +63,8 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     ports:
-      - "9000:9000"   # API endpoint
-      - "9001:9001"   # Web console
+      - "9000:9000"
+      - "9001:9001"
     volumes:
       - minio_data:/data
     healthcheck:
@@ -81,7 +76,6 @@ services:
     networks:
       - etl_network
 
-  # Creates buckets automatically on startup
   minio-setup:
     image: minio/mc:latest
     platform: linux/arm64
@@ -96,7 +90,7 @@ services:
       mc mb -p local/silver;
       mc mb -p local/gold;
       mc mb -p local/checkpoints;
-      echo '✅ Buckets created: bronze, silver, gold, checkpoints';
+      echo 'Buckets created: bronze, silver, gold, checkpoints';
       "
     networks:
       - etl_network
@@ -110,27 +104,25 @@ services:
       dockerfile: Dockerfile
     platform: linux/arm64
     container_name: etl_spark_master
-    command: /opt/bitnami/spark/bin/spark-class org.apache.spark.deploy.master.Master
     environment:
-      SPARK_MODE: master
+      SPARK_NO_DAEMONIZE: "true"
       SPARK_MASTER_HOST: spark-master
-      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
-      SPARK_RPC_ENCRYPTION_ENABLED: "no"
-      SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED: "no"
-      SPARK_SSL_ENABLED: "no"
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master", "--host", "spark-master"]
     ports:
-      - "8085:8080"   # Spark Master UI
-      - "7077:7077"   # Spark Master port
+      - "8085:8080"
+      - "7077:7077"
     volumes:
       - ../src:/opt/spark-apps/src
       - ../config:/opt/spark-apps/config
       - ../data:/opt/spark-apps/data
-      - spark_logs:/opt/bitnami/spark/logs
+      - spark_logs:/opt/spark/logs
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8080 || exit 1"]
       interval: 15s
       retries: 5
-      start_period: 20s
+      start_period: 30s
     restart: unless-stopped
     networks:
       - etl_network
@@ -144,14 +136,13 @@ services:
       dockerfile: Dockerfile
     platform: linux/arm64
     container_name: etl_spark_worker_1
-    command: /opt/bitnami/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
     environment:
-      SPARK_MODE: worker
-      SPARK_MASTER_URL: spark://spark-master:7077
-      SPARK_WORKER_MEMORY: 2G
+      SPARK_NO_DAEMONIZE: "true"
+      SPARK_WORKER_MEMORY: 2g
       SPARK_WORKER_CORES: 2
-      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
-      SPARK_RPC_ENCRYPTION_ENABLED: "no"
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077"]
     depends_on:
       spark-master:
         condition: service_healthy
@@ -171,14 +162,13 @@ services:
       dockerfile: Dockerfile
     platform: linux/arm64
     container_name: etl_spark_worker_2
-    command: /opt/bitnami/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
     environment:
-      SPARK_MODE: worker
-      SPARK_MASTER_URL: spark://spark-master:7077
-      SPARK_WORKER_MEMORY: 2G
+      SPARK_NO_DAEMONIZE: "true"
+      SPARK_WORKER_MEMORY: 2g
       SPARK_WORKER_CORES: 2
-      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
-      SPARK_RPC_ENCRYPTION_ENABLED: "no"
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077"]
     depends_on:
       spark-master:
         condition: service_healthy
@@ -190,7 +180,7 @@ services:
       - etl_network
 
   # ─────────────────────────────────────────
-  # 📓 Jupyter Lab — Interactive exploration
+  # 📓 Jupyter Lab
   # ─────────────────────────────────────────
   jupyter:
     build:
@@ -198,20 +188,18 @@ services:
       dockerfile: Dockerfile
     platform: linux/arm64
     container_name: etl_jupyter
-    command: >
-      jupyter lab
-      --ip=0.0.0.0
-      --port=8888
-      --no-browser
-      --NotebookApp.token=''
-      --NotebookApp.password=''
-      --notebook-dir=/opt/spark-apps
     environment:
       SPARK_MASTER: spark://spark-master:7077
       AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
       AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       AWS_DEFAULT_REGION: us-east-1
       MINIO_ENDPOINT: http://minio:9000
+    command: >
+      /bin/bash -c "
+      jupyter lab --ip=0.0.0.0 --port=8888 --no-browser
+      --NotebookApp.token='' --NotebookApp.password=''
+      --notebook-dir=/opt/spark-apps
+      "
     ports:
       - "8888:8888"
     depends_on:
@@ -242,7 +230,6 @@ services:
           --role Admin \
           --email admin@pipeline.local \
           --password admin
-        echo "✅ Airflow initialized"
     restart: on-failure
     networks:
       - etl_network
@@ -255,7 +242,7 @@ services:
     container_name: etl_airflow_webserver
     command: webserver
     ports:
-      - "8080:8080"   # Airflow UI
+      - "8080:8080"
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
       interval: 30s
