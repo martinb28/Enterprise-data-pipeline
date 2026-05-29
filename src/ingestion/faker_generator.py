@@ -9,7 +9,7 @@ import csv
 import io
 import random
 from datetime import datetime, timedelta
-from typing import Generator
+from typing import Any, Dict, List, Optional, Tuple
 
 from faker import Faker
 
@@ -60,7 +60,7 @@ class FakerGenerator:
         self._product_ids: list = []
         self._order_ids: list = []
 
-    def _generate_customers(self) -> tuple[list, list]:
+    def _generate_customers(self) -> Tuple[List, List]:
         """Generates customer records."""
         logger.info(f"Generating {self.num_customers:,} customers...")
         fieldnames = [
@@ -80,7 +80,7 @@ class FakerGenerator:
             })
         return fieldnames, rows
 
-    def _generate_sellers(self, num_sellers: int = 500) -> tuple[list, list]:
+    def _generate_sellers(self, num_sellers: int = 500) -> Tuple[List, List]:
         """Generates seller records."""
         logger.info(f"Generating {num_sellers:,} sellers...")
         fieldnames = [
@@ -98,7 +98,7 @@ class FakerGenerator:
             })
         return fieldnames, rows
 
-    def _generate_products(self, num_products: int = 2_000) -> tuple[list, list]:
+    def _generate_products(self, num_products: int = 2_000) -> Tuple[List, List]:
         """Generates product records."""
         logger.info(f"Generating {num_products:,} products...")
         fieldnames = [
@@ -124,7 +124,7 @@ class FakerGenerator:
             })
         return fieldnames, rows
 
-    def _generate_orders(self) -> tuple[list, list]:
+    def _generate_orders(self) -> Tuple[List, List]:
         """Generates order records (1.2x customers to allow repeat buyers)."""
         num_orders = int(self.num_customers * 1.2)
         logger.info(f"Generating {num_orders:,} orders...")
@@ -166,7 +166,7 @@ class FakerGenerator:
             })
         return fieldnames, rows
 
-    def _generate_order_items(self) -> tuple[list, list]:
+    def _generate_order_items(self) -> Tuple[List, List]:
         """Generates order line items (avg 1.5 items per order)."""
         num_items = int(len(self._order_ids) * 1.5)
         logger.info(f"Generating {num_items:,} order items...")
@@ -191,7 +191,7 @@ class FakerGenerator:
                 })
         return fieldnames, rows
 
-    def _generate_payments(self) -> tuple[list, list]:
+    def _generate_payments(self) -> Tuple[List, List]:
         """Generates payment records."""
         logger.info(f"Generating payments for {len(self._order_ids):,} orders...")
         fieldnames = [
@@ -211,7 +211,7 @@ class FakerGenerator:
             })
         return fieldnames, rows
 
-    def _generate_reviews(self) -> tuple[list, list]:
+    def _generate_reviews(self) -> Tuple[List, List]:
         """Generates customer review records."""
         num_reviews = int(len(self._order_ids) * 0.8)  # 80% of orders have reviews
         logger.info(f"Generating {num_reviews:,} reviews...")
@@ -243,7 +243,7 @@ class FakerGenerator:
         writer.writerows(rows)
         return buffer.getvalue().encode("utf-8")
 
-    def generate_and_upload(self, date_partition: str = None) -> dict:
+    def generate_and_upload(self, date_partition: Optional[str] = None) -> Dict[str, int]:
         """
         Generates all synthetic tables and uploads them to Bronze layer.
 
