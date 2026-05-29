@@ -1,0 +1,299 @@
+version: "3.8"
+
+x-airflow-common: &airflow-common
+  build:
+    context: ./airflow
+    dockerfile: Dockerfile
+  platform: linux/arm64
+  env_file:
+    - ../.env
+  environment:
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__FERNET_KEY: ""
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+    # MinIO / S3 connection
+    AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+    AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    AWS_DEFAULT_REGION: us-east-1
+    # Spark
+    SPARK_MASTER_URL: spark://spark-master:7077
+    # Pipeline config
+    PIPELINE_ENV: local
+  volumes:
+    - ../dags:/opt/airflow/dags
+    - ../src:/opt/airflow/src
+    - ../config:/opt/airflow/config
+    - ../logs/airflow:/opt/airflow/logs
+    - ../data:/opt/airflow/data
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  # ─────────────────────────────────────────
+  # 🗄️  PostgreSQL — Airflow backend
+  # ─────────────────────────────────────────
+  postgres:
+    image: postgres:15
+    platform: linux/arm64
+    container_name: etl_postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - etl_network
+
+  # ─────────────────────────────────────────
+  # ☁️  MinIO — Simulates Azure Data Lake Gen2
+  # ─────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    platform: linux/arm64
+    container_name: etl_minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "9000:9000"   # API endpoint
+      - "9001:9001"   # Web console
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - etl_network
+
+  # Creates buckets automatically on startup
+  minio-setup:
+    image: minio/mc:latest
+    platform: linux/arm64
+    container_name: etl_minio_setup
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin;
+      mc mb -p local/bronze;
+      mc mb -p local/silver;
+      mc mb -p local/gold;
+      mc mb -p local/checkpoints;
+      echo '✅ Buckets created: bronze, silver, gold, checkpoints';
+      "
+    networks:
+      - etl_network
+
+  # ─────────────────────────────────────────
+  # ⚡ Apache Spark — Master Node
+  # ─────────────────────────────────────────
+  spark-master:
+    build:
+      context: ./spark
+      dockerfile: Dockerfile
+    platform: linux/arm64
+    container_name: etl_spark_master
+    command: /opt/bitnami/spark/bin/spark-class org.apache.spark.deploy.master.Master
+    environment:
+      SPARK_MODE: master
+      SPARK_MASTER_HOST: spark-master
+      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
+      SPARK_RPC_ENCRYPTION_ENABLED: "no"
+      SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED: "no"
+      SPARK_SSL_ENABLED: "no"
+    ports:
+      - "8085:8080"   # Spark Master UI
+      - "7077:7077"   # Spark Master port
+    volumes:
+      - ../src:/opt/spark-apps/src
+      - ../config:/opt/spark-apps/config
+      - ../data:/opt/spark-apps/data
+      - spark_logs:/opt/bitnami/spark/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 15s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - etl_network
+
+  # ─────────────────────────────────────────
+  # ⚡ Apache Spark — Worker 1
+  # ─────────────────────────────────────────
+  spark-worker-1:
+    build:
+      context: ./spark
+      dockerfile: Dockerfile
+    platform: linux/arm64
+    container_name: etl_spark_worker_1
+    command: /opt/bitnami/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+      SPARK_WORKER_MEMORY: 2G
+      SPARK_WORKER_CORES: 2
+      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
+      SPARK_RPC_ENCRYPTION_ENABLED: "no"
+    depends_on:
+      spark-master:
+        condition: service_healthy
+    volumes:
+      - ../src:/opt/spark-apps/src
+      - ../data:/opt/spark-apps/data
+    restart: unless-stopped
+    networks:
+      - etl_network
+
+  # ─────────────────────────────────────────
+  # ⚡ Apache Spark — Worker 2
+  # ─────────────────────────────────────────
+  spark-worker-2:
+    build:
+      context: ./spark
+      dockerfile: Dockerfile
+    platform: linux/arm64
+    container_name: etl_spark_worker_2
+    command: /opt/bitnami/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+      SPARK_WORKER_MEMORY: 2G
+      SPARK_WORKER_CORES: 2
+      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
+      SPARK_RPC_ENCRYPTION_ENABLED: "no"
+    depends_on:
+      spark-master:
+        condition: service_healthy
+    volumes:
+      - ../src:/opt/spark-apps/src
+      - ../data:/opt/spark-apps/data
+    restart: unless-stopped
+    networks:
+      - etl_network
+
+  # ─────────────────────────────────────────
+  # 📓 Jupyter Lab — Interactive exploration
+  # ─────────────────────────────────────────
+  jupyter:
+    build:
+      context: ./spark
+      dockerfile: Dockerfile
+    platform: linux/arm64
+    container_name: etl_jupyter
+    command: >
+      jupyter lab
+      --ip=0.0.0.0
+      --port=8888
+      --no-browser
+      --NotebookApp.token=''
+      --NotebookApp.password=''
+      --notebook-dir=/opt/spark-apps
+    environment:
+      SPARK_MASTER: spark://spark-master:7077
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      AWS_DEFAULT_REGION: us-east-1
+      MINIO_ENDPOINT: http://minio:9000
+    ports:
+      - "8888:8888"
+    depends_on:
+      - spark-master
+    volumes:
+      - ../src:/opt/spark-apps/src
+      - ../config:/opt/spark-apps/config
+      - ../data:/opt/spark-apps/data
+    restart: unless-stopped
+    networks:
+      - etl_network
+
+  # ─────────────────────────────────────────
+  # 🌬️ Apache Airflow — DB Init
+  # ─────────────────────────────────────────
+  airflow-init:
+    <<: *airflow-common
+    container_name: etl_airflow_init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username admin \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email admin@pipeline.local \
+          --password admin
+        echo "✅ Airflow initialized"
+    restart: on-failure
+    networks:
+      - etl_network
+
+  # ─────────────────────────────────────────
+  # 🌬️ Apache Airflow — Webserver
+  # ─────────────────────────────────────────
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: etl_airflow_webserver
+    command: webserver
+    ports:
+      - "8080:8080"   # Airflow UI
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    networks:
+      - etl_network
+
+  # ─────────────────────────────────────────
+  # 🌬️ Apache Airflow — Scheduler
+  # ─────────────────────────────────────────
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: etl_airflow_scheduler
+    command: scheduler
+    healthcheck:
+      test: ["CMD", "airflow", "jobs", "check", "--job-type", "SchedulerJob", "--hostname", "$${HOSTNAME}"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    networks:
+      - etl_network
+
+volumes:
+  postgres_data:
+  minio_data:
+  spark_logs:
+
+networks:
+  etl_network:
+    driver: bridge

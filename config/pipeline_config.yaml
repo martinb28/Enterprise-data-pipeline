@@ -1,0 +1,88 @@
+# Pipeline global configuration
+pipeline:
+  name: "enterprise-data-pipeline"
+  version: "1.0.0"
+  env: ${PIPELINE_ENV:-local}
+
+# Storage layers (MinIO buckets = Azure Data Lake containers)
+storage:
+  endpoint: ${MINIO_ENDPOINT:-http://minio:9000}
+  access_key: ${MINIO_ROOT_USER:-minioadmin}
+  secret_key: ${MINIO_ROOT_PASSWORD:-minioadmin}
+  buckets:
+    bronze: "bronze"
+    silver: "silver"
+    gold: "gold"
+    checkpoints: "checkpoints"
+  paths:
+    # Bronze — raw ingested data
+    bronze_olist: "olist/raw/{date}/"
+    # Silver — cleaned & conformed
+    silver_orders: "orders/enriched/"
+    silver_customers: "customers/enriched/"
+    silver_products: "products/enriched/"
+    silver_sellers: "sellers/enriched/"
+    # Gold — analytics ready
+    gold_customer_rfm: "customer_rfm/"
+    gold_product_perf: "product_performance/"
+    gold_seller_scorecard: "seller_scorecard/"
+    gold_daily_revenue: "daily_revenue_summary/"
+
+# Spark configuration
+spark:
+  master: ${SPARK_MASTER_URL:-local[*]}
+  app_name: "enterprise-etl-pipeline"
+  config:
+    spark.sql.adaptive.enabled: "true"
+    spark.sql.adaptive.coalescePartitions.enabled: "true"
+    spark.sql.shuffle.partitions: "8"
+    spark.driver.memory: "1g"
+    spark.executor.memory: "1g"
+    # Delta Lake
+    spark.sql.extensions: "io.delta.sql.DeltaSparkSessionExtension"
+    spark.sql.catalog.spark_catalog: "org.apache.spark.sql.delta.catalog.DeltaCatalog"
+    # S3A / MinIO
+    spark.hadoop.fs.s3a.endpoint: ${MINIO_ENDPOINT:-http://minio:9000}
+    spark.hadoop.fs.s3a.access.key: ${MINIO_ROOT_USER:-minioadmin}
+    spark.hadoop.fs.s3a.secret.key: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    spark.hadoop.fs.s3a.path.style.access: "true"
+    spark.hadoop.fs.s3a.impl: "org.apache.hadoop.fs.s3a.S3AFileSystem"
+
+# Olist dataset configuration
+dataset:
+  kaggle:
+    dataset_id: "olistbr/brazilian-ecommerce"
+    files:
+      - olist_customers_dataset.csv
+      - olist_geolocation_dataset.csv
+      - olist_order_items_dataset.csv
+      - olist_order_payments_dataset.csv
+      - olist_order_reviews_dataset.csv
+      - olist_orders_dataset.csv
+      - olist_products_dataset.csv
+      - olist_sellers_dataset.csv
+      - product_category_name_translation.csv
+  local_path: "data/raw/olist"
+
+# Data quality thresholds
+data_quality:
+  max_null_ratio: 0.05        # Max 5% nulls per column
+  min_row_count: 1000         # Minimum expected rows
+  max_duplicate_ratio: 0.01   # Max 1% duplicates
+
+# Airflow DAG configuration
+airflow:
+  default_args:
+    owner: "data-engineering"
+    retries: 2
+    retry_delay_minutes: 5
+    email_on_failure: false
+  schedules:
+    bronze: "@daily"
+    silver: "@daily"
+    gold: "@daily"
+
+# Logging
+logging:
+  level: ${LOG_LEVEL:-INFO}
+  format: "%(asctime)s | %(levelname)s | %(name)s | %(message)s"

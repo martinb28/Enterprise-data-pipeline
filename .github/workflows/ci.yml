@@ -1,0 +1,152 @@
+name: CI — Enterprise Data Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  PYTHON_VERSION: "3.11"
+  JAVA_VERSION: "17"
+
+jobs:
+  # ─────────────────────────────────────────
+  # Job 1: Code Quality (fast, no Spark needed)
+  # ─────────────────────────────────────────
+  lint:
+    name: Code Quality (lint + format)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install linting tools
+        run: pip install flake8 black isort
+
+      - name: Check formatting with black
+        run: black --check src/ dags/ tests/
+
+      - name: Check import order with isort
+        run: isort --check-only src/ dags/ tests/
+
+      - name: Lint with flake8
+        run: |
+          flake8 src/ dags/ tests/ \
+            --max-line-length=100 \
+            --extend-ignore=E203,W503 \
+            --exclude=__pycache__,.git
+
+  # ─────────────────────────────────────────
+  # Job 2: Unit Tests (PySpark in local mode)
+  # ─────────────────────────────────────────
+  unit-tests:
+    name: Unit Tests (PySpark local)
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Set test environment variables
+        run: |
+          echo "PIPELINE_ENV=test" >> $GITHUB_ENV
+          echo "MINIO_ROOT_USER=minioadmin" >> $GITHUB_ENV
+          echo "MINIO_ROOT_PASSWORD=minioadmin" >> $GITHUB_ENV
+          echo "MINIO_ENDPOINT=http://localhost:9000" >> $GITHUB_ENV
+          echo "SPARK_MASTER_URL=local[2]" >> $GITHUB_ENV
+          echo "LOG_LEVEL=WARNING" >> $GITHUB_ENV
+
+      - name: Run unit tests with coverage
+        run: |
+          pytest tests/unit/ \
+            --tb=short \
+            --cov=src \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --cov-fail-under=75 \
+            -v
+
+      - name: Upload coverage report
+        uses: codecov/codecov-action@v4
+        if: always()
+        with:
+          file: coverage.xml
+          flags: unit-tests
+
+  # ─────────────────────────────────────────
+  # Job 3: Schema Validation
+  # ─────────────────────────────────────────
+  schema-validation:
+    name: Schema & Config Validation
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install pyyaml jsonschema
+
+      - name: Validate pipeline config YAML
+        run: python -c "import yaml; yaml.safe_load(open('config/pipeline_config.yaml'))"
+
+      - name: Validate schema JSON files
+        run: |
+          python -c "
+          import json, os
+          schemas_dir = 'config/schemas'
+          for f in os.listdir(schemas_dir):
+              if f.endswith('.json'):
+                  with open(os.path.join(schemas_dir, f)) as fp:
+                      json.load(fp)
+                  print(f'✅ Valid JSON schema: {f}')
+          "
+
+  # ─────────────────────────────────────────
+  # Job 4: Build Summary
+  # ─────────────────────────────────────────
+  ci-summary:
+    name: CI Summary
+    runs-on: ubuntu-latest
+    needs: [lint, unit-tests, schema-validation]
+    if: always()
+    steps:
+      - name: Report CI status
+        run: |
+          echo "================================"
+          echo "   CI Pipeline Summary"
+          echo "================================"
+          echo "Lint:              ${{ needs.lint.result }}"
+          echo "Unit Tests:        ${{ needs.unit-tests.result }}"
+          echo "Schema Validation: ${{ needs.schema-validation.result }}"
+          echo "================================"
+          if [[ "${{ needs.unit-tests.result }}" == "failure" ]]; then
+            echo "❌ CI FAILED — unit tests failed"
+            exit 1
+          fi
+          echo "✅ CI PASSED"
