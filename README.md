@@ -1,8 +1,8 @@
 # 🚀 Enterprise Data Pipeline
 
-[![CI Status](https://github.com/YOUR_USERNAME/ETL-enterprise-data-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/YOUR_USERNAME/ETL-enterprise-data-pipeline/actions)
-[![Python 3.11](https://img.shields.io/badge/Python-3.11-blue.svg)](https://www.python.org/)
-[![PySpark 3.5](https://img.shields.io/badge/PySpark-3.5-orange.svg)](https://spark.apache.org/)
+[![CI](https://github.com/martinb28/Enterprise-data-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/martinb28/Enterprise-data-pipeline/actions)
+[![Python 3.8](https://img.shields.io/badge/Python-3.8-blue.svg)](https://www.python.org/)
+[![PySpark 3.5](https://img.shields.io/badge/PySpark-3.5.5-orange.svg)](https://spark.apache.org/)
 [![Apache Airflow 2.9](https://img.shields.io/badge/Airflow-2.9-green.svg)](https://airflow.apache.org/)
 [![Delta Lake](https://img.shields.io/badge/Delta_Lake-3.2-blue.svg)](https://delta.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -82,8 +82,8 @@
 ### 1. Clone & Configure
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/ETL-enterprise-data-pipeline.git
-cd "ETL-enterprise data pipeline"
+git clone https://github.com/martinb28/Enterprise-data-pipeline.git
+cd "Enterprise-data-pipeline"
 
 # Create .env from template
 make setup-env

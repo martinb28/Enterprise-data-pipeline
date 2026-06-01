@@ -4,7 +4,8 @@
 .DEFAULT_GOAL := help
 PROJECT_NAME  := enterprise-data-pipeline
 DOCKER_DIR    := docker
-COMPOSE       := docker compose -f $(DOCKER_DIR)/docker-compose.yml
+DOCKER        := /usr/local/bin/docker
+COMPOSE       := /usr/local/bin/docker compose -f $(DOCKER_DIR)/docker-compose.yml
 PYTHON        := python3
 
 .PHONY: help up down logs build clean test lint format pipeline-run \

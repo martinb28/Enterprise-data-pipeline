@@ -18,6 +18,7 @@ x-airflow-common: &airflow-common
     AWS_DEFAULT_REGION: us-east-1
     SPARK_MASTER_URL: spark://spark-master:7077
     PIPELINE_ENV: local
+    PYTHONPATH: /opt/airflow
   volumes:
     - ../dags:/opt/airflow/dags
     - ../src:/opt/airflow/src
@@ -115,6 +116,7 @@ services:
       - "7077:7077"
     volumes:
       - ../src:/opt/spark-apps/src
+      - ../tests:/opt/spark-apps/tests
       - ../config:/opt/spark-apps/config
       - ../data:/opt/spark-apps/data
       - spark_logs:/opt/spark/logs
